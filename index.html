@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Prometheus Block Size Calculator</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            line-height: 1.6;
+            background-color: #f8f9fa;
+            color: #212529;
+            max-width: 600px;
+            margin: 20px auto;
+            padding: 20px;
+            border: 1px solid #dee2e6;
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+        }
+        h1 {
+            text-align: center;
+            color: #0d6efd;
+            border-bottom: 2px solid #0d6efd;
+            padding-bottom: 10px;
+        }
+        .form-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+        .form-grid label {
+            font-weight: 600;
+            display: block;
+            margin-bottom: 5px;
+        }
+        .form-grid input {
+            width: 100%;
+            padding: 10px;
+            box-sizing: border-box; /* Ensures padding doesn't affect width */
+            border: 1px solid #ced4da;
+            border-radius: 4px;
+        }
+        .form-grid .full-width {
+            grid-column: 1 / -1; /* Span full width */
+        }
+        button {
+            display: block;
+            width: 100%;
+            padding: 12px;
+            font-size: 16px;
+            font-weight: 600;
+            color: #fff;
+            background-color: #0d6efd;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+        button:hover {
+            background-color: #0b5ed7;
+        }
+        #results {
+            margin-top: 25px;
+            background-color: #fff;
+            padding: 20px;
+            border-radius: 8px;
+            border: 1px solid #e9ecef;
+            display: none; /* Hidden by default */
+        }
+        #results h2 {
+            margin-top: 0;
+            color: #343a40;
+        }
+        #results p {
+            font-size: 1.1em;
+            margin: 10px 0;
+            line-height: 1.5;
+        }
+        #results strong {
+            color: #0d6efd;
+        }
+        .note {
+            font-style: italic;
+            font-size: 0.9em;
+            color: #6c757d;
+            margin-top: 15px;
+            border-top: 1px dashed #ced4da;
+            padding-top: 10px;
+        }
+        .checkbox-group {
+            display: flex;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+        .checkbox-group input[type="checkbox"] {
+            width: auto;
+            margin-right: 10px;
+            transform: scale(1.2);
+            cursor: pointer;
+        }
+        .checkbox-group label {
+            font-weight: 600;
+            cursor: pointer;
+            margin: 0;
+        }
+        .downsampling-section {
+            background-color: #f0f7ff;
+            border: 1px solid #b8daff;
+            border-radius: 6px;
+            padding: 15px;
+            margin-bottom: 20px;
+            display: none;
+        }
+        .downsampling-section.active {
+            display: block;
+        }
+        .downsampling-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+            margin-top: 10px;
+        }
+        .downsampling-grid label {
+            font-weight: 600;
+            display: block;
+            margin-bottom: 5px;
+        }
+        .downsampling-grid input {
+            width: 100%;
+            padding: 10px;
+            box-sizing: border-box;
+            border: 1px solid #ced4da;
+            border-radius: 4px;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>Thanos Block Size Calculator</h1>
+
+    <div class="form-grid">
+        <div>
+            <label for="blockDuration">Block Duration</label>
+            <input type="text" id="blockDuration" value="2h" placeholder="e.g., 2h, 30m">
+        </div>
+        <div>
+            <label for="scrapeInterval">Scrape Interval</label>
+            <input type="text" id="scrapeInterval" value="15s" placeholder="e.g., 15s, 1m">
+        </div>
+        <div class="full-width">
+            <label for="numSeries">Number of Head Series</label>
+            <input type="number" id="numSeries" value="500000" placeholder="e.g., 500000">
+        </div>
+        <div class="full-width">
+            <label for="retention">Retention Period (optional)</label>
+            <input type="text" id="retention" value="" placeholder="e.g., 15d, 30d, 1y">
+        </div>
+    </div>
+
+    <div class="checkbox-group">
+        <input type="checkbox" id="enableDownsampling">
+        <label for="enableDownsampling">Enable Downsampling</label>
+    </div>
+
+    <div id="downsamplingSection" class="downsampling-section">
+        <div class="downsampling-grid">
+            <div>
+                <label for="retention5m">5m Blocks Retention</label>
+                <input type="text" id="retention5m" value="" placeholder="e.g., 7d, 30d">
+            </div>
+            <div>
+                <label for="retention1h">1h Blocks Retention</label>
+                <input type="text" id="retention1h" value="" placeholder="e.g., 90d, 1y">
+            </div>
+        </div>
+    </div>
+
+    <button id="calculateBtn">Calculate</button>
+
+    <div id="results">
+        <h2>📊 Calculation Results</h2>
+        <p>Total Samples: <strong id="totalSamples"></strong></p>
+        <p>Total Size of Samples: <strong id="samplesSize"></strong></p>
+        <hr>
+        <p>Est. Index Size: <strong id="indexSize"></strong></p>
+        <p><strong>Total Est. Block Size: <strong id="totalSize"></strong></strong></p>
+
+        <div id="retentionResults" style="display: none;">
+            <hr>
+            <p>Number of Blocks: <strong id="numBlocks"></strong></p>
+            <p><strong style="font-size: 1.2em;">Total Disk Space Needed: <strong id="totalDiskSpace"></strong></strong></p>
+        </div>
+
+        <div id="downsamplingResults" style="display: none;">
+            <hr>
+            <h3 style="color: #0d6efd; margin-top: 15px;">Downsampled Blocks</h3>
+            <div style="background-color: #f8f9fa; padding: 15px; border-radius: 6px; margin-top: 10px;">
+                <p><strong>5m Resolution Blocks:</strong></p>
+                <p style="margin-left: 20px;">Block Size: <strong id="blockSize5m"></strong></p>
+                <p style="margin-left: 20px;">Number of Blocks: <strong id="numBlocks5m"></strong></p>
+                <p style="margin-left: 20px;">Total Storage: <strong id="totalStorage5m"></strong></p>
+            </div>
+            <div style="background-color: #f8f9fa; padding: 15px; border-radius: 6px; margin-top: 10px;">
+                <p><strong>1h Resolution Blocks:</strong></p>
+                <p style="margin-left: 20px;">Block Size: <strong id="blockSize1h"></strong></p>
+                <p style="margin-left: 20px;">Number of Blocks: <strong id="numBlocks1h"></strong></p>
+                <p style="margin-left: 20px;">Total Storage: <strong id="totalStorage1h"></strong></p>
+            </div>
+            <hr>
+            <p><strong style="font-size: 1.2em;">Total Storage (Raw + Downsampled): <strong id="totalStorageAll"></strong></strong></p>
+        </div>
+
+        <p class="note">
+            <strong>Note:</strong> The index size is a rough heuristic (approx. 400 bytes per series).
+            Actual size depends heavily on label cardinality (number of unique labels and values).
+        </p>
+    </div>
+
+    <script>
+        // --- Toggle downsampling section ---
+        document.getElementById('enableDownsampling').addEventListener('change', function() {
+            const section = document.getElementById('downsamplingSection');
+            if (this.checked) {
+                section.classList.add('active');
+            } else {
+                section.classList.remove('active');
+            }
+        });
+
+        // --- Helper function to parse duration strings (e.g., "2h", "15s") into seconds ---
+        function parseDuration(durationStr) {
+            const regex = /^(\d+)([smhdwy])$/;
+            const match = durationStr.match(regex);
+            
+            if (!match) {
+                alert(`Invalid duration format: ${durationStr}. Use 's', 'm', 'h', 'd', 'w', 'y'.`);
+                return null;
+            }
+
+            const value = parseInt(match[1], 10);
+            const unit = match[2];
+            
+            switch (unit) {
+                case 's': return value;
+                case 'm': return value * 60;
+                case 'h': return value * 60 * 60;
+                case 'd': return value * 60 * 60 * 24;
+                case 'w': return value * 60 * 60 * 24 * 7;
+                case 'y': return value * 60 * 60 * 24 * 365;
+                default: return null;
+            }
+        }
+
+        // --- Helper function to format bytes into KB, MB, GB, etc. ---
+        function formatBytes(bytes, decimals = 2) {
+            if (bytes === 0) return '0 Bytes';
+            const k = 1024;
+            const dm = decimals < 0 ? 0 : decimals;
+            const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB', 'PB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
+        }
+
+        // --- Main calculation logic ---
+        document.getElementById('calculateBtn').addEventListener('click', function() {
+            // 1. Get and parse inputs
+            const blockDurationStr = document.getElementById('blockDuration').value;
+            const scrapeIntervalStr = document.getElementById('scrapeInterval').value;
+            const numSeries = parseInt(document.getElementById('numSeries').value, 10);
+            const retentionStr = document.getElementById('retention').value.trim();
+
+            const blockDurationSec = parseDuration(blockDurationStr);
+            const scrapeIntervalSec = parseDuration(scrapeIntervalStr);
+
+            if (blockDurationSec === null || scrapeIntervalSec === null || isNaN(numSeries)) {
+                return; // Error already shown by parseDuration
+            }
+
+            if (scrapeIntervalSec === 0) {
+                alert("Scrape interval cannot be zero.");
+                return;
+            }
+
+            // 2. Define constants
+            const sampleSizeBytes = 1.37;
+            const indexBytesPerSeries = 400; // Heuristic for index size
+
+            // 3. Perform calculations
+            const samplesPerSeries = blockDurationSec / scrapeIntervalSec;
+            const totalSamples = samplesPerSeries * numSeries;
+            const totalSamplesSize = totalSamples * sampleSizeBytes;
+
+            const estimatedIndexSize = numSeries * indexBytesPerSeries;
+
+            const totalBlockSize = totalSamplesSize + estimatedIndexSize;
+
+            // 4. Display results
+            document.getElementById('totalSamples').textContent = totalSamples.toLocaleString();
+            document.getElementById('samplesSize').textContent = formatBytes(totalSamplesSize);
+            document.getElementById('indexSize').textContent = formatBytes(estimatedIndexSize);
+            document.getElementById('totalSize').textContent = formatBytes(totalBlockSize);
+
+            // 5. Calculate retention-based disk space if provided
+            if (retentionStr) {
+                const retentionSec = parseDuration(retentionStr);
+                if (retentionSec === null) {
+                    return; // Error already shown by parseDuration
+                }
+
+                const numBlocks = Math.ceil(retentionSec / blockDurationSec);
+                const totalDiskSpace = totalBlockSize * numBlocks;
+
+                document.getElementById('numBlocks').textContent = numBlocks.toLocaleString();
+                document.getElementById('totalDiskSpace').textContent = formatBytes(totalDiskSpace);
+                document.getElementById('retentionResults').style.display = 'block';
+            } else {
+                document.getElementById('retentionResults').style.display = 'none';
+            }
+
+            // 6. Calculate downsampling if enabled
+            const downsamplingEnabled = document.getElementById('enableDownsampling').checked;
+            if (downsamplingEnabled) {
+                const retention5mStr = document.getElementById('retention5m').value.trim();
+                const retention1hStr = document.getElementById('retention1h').value.trim();
+
+                if (retention5mStr || retention1hStr) {
+                    let totalDownsampledStorage = 0;
+
+                    // Calculate 5m resolution blocks
+                    if (retention5mStr) {
+                        const retention5mSec = parseDuration(retention5mStr);
+                        if (retention5mSec === null) {
+                            return; // Error already shown by parseDuration
+                        }
+
+                        const interval5mSec = 5 * 60; // 5 minutes in seconds
+                        const blockDuration5mSec = blockDurationSec; // Use same block duration
+                        const samplesPerSeries5m = blockDuration5mSec / interval5mSec;
+                        const totalSamples5m = samplesPerSeries5m * numSeries;
+                        const totalSamplesSize5m = totalSamples5m * sampleSizeBytes;
+                        const estimatedIndexSize5m = numSeries * indexBytesPerSeries;
+                        const totalBlockSize5m = totalSamplesSize5m + estimatedIndexSize5m;
+                        const numBlocks5m = Math.ceil(retention5mSec / blockDuration5mSec);
+                        const totalStorage5m = totalBlockSize5m * numBlocks5m;
+
+                        document.getElementById('blockSize5m').textContent = formatBytes(totalBlockSize5m);
+                        document.getElementById('numBlocks5m').textContent = numBlocks5m.toLocaleString();
+                        document.getElementById('totalStorage5m').textContent = formatBytes(totalStorage5m);
+                        totalDownsampledStorage += totalStorage5m;
+                    } else {
+                        document.getElementById('blockSize5m').textContent = 'N/A';
+                        document.getElementById('numBlocks5m').textContent = 'N/A';
+                        document.getElementById('totalStorage5m').textContent = 'N/A';
+                    }
+
+                    // Calculate 1h resolution blocks
+                    if (retention1hStr) {
+                        const retention1hSec = parseDuration(retention1hStr);
+                        if (retention1hSec === null) {
+                            return; // Error already shown by parseDuration
+                        }
+
+                        const interval1hSec = 60 * 60; // 1 hour in seconds
+                        const blockDuration1hSec = blockDurationSec; // Use same block duration
+                        const samplesPerSeries1h = blockDuration1hSec / interval1hSec;
+                        const totalSamples1h = samplesPerSeries1h * numSeries;
+                        const totalSamplesSize1h = totalSamples1h * sampleSizeBytes;
+                        const estimatedIndexSize1h = numSeries * indexBytesPerSeries;
+                        const totalBlockSize1h = totalSamplesSize1h + estimatedIndexSize1h;
+                        const numBlocks1h = Math.ceil(retention1hSec / blockDuration1hSec);
+                        const totalStorage1h = totalBlockSize1h * numBlocks1h;
+
+                        document.getElementById('blockSize1h').textContent = formatBytes(totalBlockSize1h);
+                        document.getElementById('numBlocks1h').textContent = numBlocks1h.toLocaleString();
+                        document.getElementById('totalStorage1h').textContent = formatBytes(totalStorage1h);
+                        totalDownsampledStorage += totalStorage1h;
+                    } else {
+                        document.getElementById('blockSize1h').textContent = 'N/A';
+                        document.getElementById('numBlocks1h').textContent = 'N/A';
+                        document.getElementById('totalStorage1h').textContent = 'N/A';
+                    }
+
+                    // Calculate total storage including raw blocks
+                    const rawBlocksStorage = retentionStr ? (totalBlockSize * Math.ceil(parseDuration(retentionStr) / blockDurationSec)) : 0;
+                    const totalStorageAll = rawBlocksStorage + totalDownsampledStorage;
+                    document.getElementById('totalStorageAll').textContent = formatBytes(totalStorageAll);
+
+                    document.getElementById('downsamplingResults').style.display = 'block';
+                } else {
+                    document.getElementById('downsamplingResults').style.display = 'none';
+                }
+            } else {
+                document.getElementById('downsamplingResults').style.display = 'none';
+            }
+
+            // Show the results div
+            document.getElementById('results').style.display = 'block';
+        });
+    </script>
+
+</body>
+</html>
