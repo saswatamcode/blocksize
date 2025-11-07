@@ -159,6 +159,45 @@
     </div>
 
     <div class="checkbox-group">
+        <input type="checkbox" id="enableAdvancedIndex">
+        <label for="enableAdvancedIndex">Advanced Index Calculation</label>
+    </div>
+
+    <div id="advancedIndexSection" class="downsampling-section">
+        <h3 style="margin-top: 0; color: #0d6efd; font-size: 1.1em;">Label Cardinality Settings</h3>
+        <p style="font-size: 0.9em; color: #6c757d; margin-bottom: 15px;">
+            Provide more accurate index sizing by specifying your label structure.
+        </p>
+        <div class="downsampling-grid">
+            <div>
+                <label for="avgLabelsPerSeries">Avg Labels per Series</label>
+                <input type="number" id="avgLabelsPerSeries" value="10" placeholder="e.g., 10">
+            </div>
+            <div>
+                <label for="avgLabelNameLength">Avg Label Name Length</label>
+                <input type="number" id="avgLabelNameLength" value="15" placeholder="e.g., 15">
+            </div>
+            <div>
+                <label for="avgLabelValueLength">Avg Label Value Length</label>
+                <input type="number" id="avgLabelValueLength" value="20" placeholder="e.g., 20">
+            </div>
+            <div>
+                <label for="uniqueLabelNames">Unique Label Names</label>
+                <input type="number" id="uniqueLabelNames" value="50" placeholder="e.g., 50">
+            </div>
+        </div>
+        <div class="downsampling-grid" style="margin-top: 15px;">
+            <div style="grid-column: 1 / -1;">
+                <label for="avgChunkSize">Avg Chunk Refs per Series</label>
+                <input type="number" id="avgChunkSize" value="4" placeholder="e.g., 4">
+                <p style="font-size: 0.85em; color: #6c757d; margin-top: 5px;">
+                    Typically 2-6 chunks per series in a 2-hour block
+                </p>
+            </div>
+        </div>
+    </div>
+
+    <div class="checkbox-group">
         <input type="checkbox" id="enableDownsampling">
         <label for="enableDownsampling">Enable Downsampling</label>
     </div>
@@ -184,6 +223,12 @@
         <p>Total Size of Samples: <strong id="samplesSize"></strong></p>
         <hr>
         <p>Est. Index Size: <strong id="indexSize"></strong></p>
+        <div id="indexBreakdown" style="display: none; margin-left: 20px; background-color: #f8f9fa; padding: 10px; border-radius: 4px; font-size: 0.95em;">
+            <p style="margin: 5px 0;">Symbol Table: <strong id="symbolTableSize"></strong></p>
+            <p style="margin: 5px 0;">Postings: <strong id="postingsSize"></strong></p>
+            <p style="margin: 5px 0;">Series References: <strong id="seriesRefsSize"></strong></p>
+            <p style="margin: 5px 0;">Label Index: <strong id="labelIndexSize"></strong></p>
+        </div>
         <p><strong>Total Est. Block Size: <strong id="totalSize"></strong></strong></p>
 
         <div id="retentionResults" style="display: none;">
@@ -212,12 +257,23 @@
         </div>
 
         <p class="note">
-            <strong>Note:</strong> The index size is a rough heuristic (approx. 400 bytes per series).
-            Actual size depends heavily on label cardinality (number of unique labels and values).
+            <strong>Note:</strong> By default, the index size uses a simple heuristic (~400 bytes per series).
+            For more accurate estimates, enable "Advanced Index Calculation" to account for your specific
+            label cardinality, which can significantly impact actual index size.
         </p>
     </div>
 
     <script>
+        // --- Toggle advanced index section ---
+        document.getElementById('enableAdvancedIndex').addEventListener('change', function() {
+            const section = document.getElementById('advancedIndexSection');
+            if (this.checked) {
+                section.classList.add('active');
+            } else {
+                section.classList.remove('active');
+            }
+        });
+
         // --- Toggle downsampling section ---
         document.getElementById('enableDownsampling').addEventListener('change', function() {
             const section = document.getElementById('downsamplingSection');
@@ -284,24 +340,79 @@
 
             // 2. Define constants
             const sampleSizeBytes = 1.37;
-            const indexBytesPerSeries = 400; // Heuristic for index size
 
             // 3. Perform calculations
             const samplesPerSeries = blockDurationSec / scrapeIntervalSec;
             const totalSamples = samplesPerSeries * numSeries;
             const totalSamplesSize = totalSamples * sampleSizeBytes;
 
-            const estimatedIndexSize = numSeries * indexBytesPerSeries;
+            // 4. Calculate index size
+            let estimatedIndexSize;
+            let indexBreakdown = null;
+
+            const advancedIndexEnabled = document.getElementById('enableAdvancedIndex').checked;
+
+            if (advancedIndexEnabled) {
+                // Use advanced calculation based on label cardinality
+                const avgLabelsPerSeries = parseInt(document.getElementById('avgLabelsPerSeries').value, 10) || 10;
+                const avgLabelNameLength = parseInt(document.getElementById('avgLabelNameLength').value, 10) || 15;
+                const avgLabelValueLength = parseInt(document.getElementById('avgLabelValueLength').value, 10) || 20;
+                const uniqueLabelNames = parseInt(document.getElementById('uniqueLabelNames').value, 10) || 50;
+                const avgChunkRefs = parseInt(document.getElementById('avgChunkSize').value, 10) || 4;
+
+                // Symbol Table: stores unique label names and values
+                // Each unique string has ~4 bytes overhead + string length
+                const avgUniqueValuesPerLabel = numSeries / uniqueLabelNames;
+                const totalUniqueValues = avgLabelsPerSeries * avgUniqueValuesPerLabel;
+                const symbolTableSize = (uniqueLabelNames * (4 + avgLabelNameLength)) +
+                                       (totalUniqueValues * (4 + avgLabelValueLength));
+
+                // Postings: inverted index mapping label pairs to series IDs
+                // Each posting entry: ~8 bytes per series ID + overhead
+                const postingsSize = avgLabelsPerSeries * numSeries * 12;
+
+                // Series references: array of series with their chunk references
+                // ~32 bytes base per series + ~16 bytes per chunk reference
+                const seriesRefsSize = numSeries * (32 + (avgChunkRefs * 16));
+
+                // Label index: TOC and label offset table
+                // ~24 bytes per series for label offset entries
+                const labelIndexSize = numSeries * 24;
+
+                estimatedIndexSize = symbolTableSize + postingsSize + seriesRefsSize + labelIndexSize;
+
+                indexBreakdown = {
+                    symbolTable: symbolTableSize,
+                    postings: postingsSize,
+                    seriesRefs: seriesRefsSize,
+                    labelIndex: labelIndexSize
+                };
+            } else {
+                // Use simple heuristic
+                const indexBytesPerSeries = 400;
+                estimatedIndexSize = numSeries * indexBytesPerSeries;
+            }
 
             const totalBlockSize = totalSamplesSize + estimatedIndexSize;
 
-            // 4. Display results
+            // 5. Display results
             document.getElementById('totalSamples').textContent = totalSamples.toLocaleString();
             document.getElementById('samplesSize').textContent = formatBytes(totalSamplesSize);
             document.getElementById('indexSize').textContent = formatBytes(estimatedIndexSize);
             document.getElementById('totalSize').textContent = formatBytes(totalBlockSize);
 
-            // 5. Calculate retention-based disk space if provided
+            // Show index breakdown if advanced mode is enabled
+            if (indexBreakdown) {
+                document.getElementById('symbolTableSize').textContent = formatBytes(indexBreakdown.symbolTable);
+                document.getElementById('postingsSize').textContent = formatBytes(indexBreakdown.postings);
+                document.getElementById('seriesRefsSize').textContent = formatBytes(indexBreakdown.seriesRefs);
+                document.getElementById('labelIndexSize').textContent = formatBytes(indexBreakdown.labelIndex);
+                document.getElementById('indexBreakdown').style.display = 'block';
+            } else {
+                document.getElementById('indexBreakdown').style.display = 'none';
+            }
+
+            // 6. Calculate retention-based disk space if provided
             if (retentionStr) {
                 const retentionSec = parseDuration(retentionStr);
                 if (retentionSec === null) {
@@ -318,7 +429,7 @@
                 document.getElementById('retentionResults').style.display = 'none';
             }
 
-            // 6. Calculate downsampling if enabled
+            // 7. Calculate downsampling if enabled
             const downsamplingEnabled = document.getElementById('enableDownsampling').checked;
             if (downsamplingEnabled) {
                 const retention5mStr = document.getElementById('retention5m').value.trim();
@@ -326,6 +437,28 @@
 
                 if (retention5mStr || retention1hStr) {
                     let totalDownsampledStorage = 0;
+
+                    // Helper function to calculate index size for downsampled blocks
+                    const calculateDownsampledIndexSize = () => {
+                        if (advancedIndexEnabled) {
+                            const avgLabelsPerSeries = parseInt(document.getElementById('avgLabelsPerSeries').value, 10) || 10;
+                            const avgLabelNameLength = parseInt(document.getElementById('avgLabelNameLength').value, 10) || 15;
+                            const avgLabelValueLength = parseInt(document.getElementById('avgLabelValueLength').value, 10) || 20;
+                            const uniqueLabelNames = parseInt(document.getElementById('uniqueLabelNames').value, 10) || 50;
+                            const avgChunkRefs = parseInt(document.getElementById('avgChunkSize').value, 10) || 4;
+
+                            const avgUniqueValuesPerLabel = numSeries / uniqueLabelNames;
+                            const totalUniqueValues = avgLabelsPerSeries * avgUniqueValuesPerLabel;
+                            const symbolTableSize = (uniqueLabelNames * (4 + avgLabelNameLength)) +
+                                                   (totalUniqueValues * (4 + avgLabelValueLength));
+                            const postingsSize = avgLabelsPerSeries * numSeries * 12;
+                            const seriesRefsSize = numSeries * (32 + (avgChunkRefs * 16));
+                            const labelIndexSize = numSeries * 24;
+                            return symbolTableSize + postingsSize + seriesRefsSize + labelIndexSize;
+                        } else {
+                            return numSeries * 400;
+                        }
+                    };
 
                     // Calculate 5m resolution blocks
                     if (retention5mStr) {
@@ -339,7 +472,7 @@
                         const samplesPerSeries5m = blockDuration5mSec / interval5mSec;
                         const totalSamples5m = samplesPerSeries5m * numSeries;
                         const totalSamplesSize5m = totalSamples5m * sampleSizeBytes;
-                        const estimatedIndexSize5m = numSeries * indexBytesPerSeries;
+                        const estimatedIndexSize5m = calculateDownsampledIndexSize();
                         const totalBlockSize5m = totalSamplesSize5m + estimatedIndexSize5m;
                         const numBlocks5m = Math.ceil(retention5mSec / blockDuration5mSec);
                         const totalStorage5m = totalBlockSize5m * numBlocks5m;
@@ -366,7 +499,7 @@
                         const samplesPerSeries1h = blockDuration1hSec / interval1hSec;
                         const totalSamples1h = samplesPerSeries1h * numSeries;
                         const totalSamplesSize1h = totalSamples1h * sampleSizeBytes;
-                        const estimatedIndexSize1h = numSeries * indexBytesPerSeries;
+                        const estimatedIndexSize1h = calculateDownsampledIndexSize();
                         const totalBlockSize1h = totalSamplesSize1h + estimatedIndexSize1h;
                         const numBlocks1h = Math.ceil(retention1hSec / blockDuration1hSec);
                         const totalStorage1h = totalBlockSize1h * numBlocks1h;
